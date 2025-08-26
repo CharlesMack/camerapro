@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>🎥 P.O.P.S. Cinema — Pro++ (Zebra Lo/Hi/Band, FC Legend, Preview-only Overlays)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#000;color:#d9f6ff;font:500 13px/1.4 ui-monospace,Menlo,Consolas,monospace;height:100vh;display:grid;place-items:center;overflow:hidden}
+    #hud{width:min(96vw,1280px);height:min(94vh,780px);border:2px solid #00e5ff55;border-radius:14px;background:linear-gradient(180deg,rgba(0,0,0,.75),rgba(0,0,0,.5));backdrop-filter:blur(6px);display:grid;grid-template-rows:auto 1fr auto;gap:10px;padding:12px}
+    .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .group{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .chip{border:1px solid #173646;border-radius:10px;background:linear-gradient(180deg,#09141b,#071018);padding:8px 10px;color:#aee7ff;display:flex;gap:8px;align-items:center}
+    select,input[type="range"],button,input[type="file"]{background:#061019;color:#dff8ff;border:1px solid #163242;border-radius:8px;padding:6px 10px;font-size:.95rem;appearance:none}
+    input[type="range"]{width:140px}
+    #view{position:relative;border:1px solid #0c2633;border-radius:8px;overflow:hidden;background:#000}
+    canvas{display:block;width:100%;height:100%}
+    .guides{position:absolute;inset:0;pointer-events:none}
+    .gate{position:absolute;left:0;right:0;margin:auto;border:2px dashed rgba(0,229,255,.45);pointer-events:none}
+    .overlays{position:absolute;left:10px;bottom:10px;display:flex;gap:10px;pointer-events:none}
+    .scope{width:200px;height:120px;border:1px solid #1b3340;border-radius:8px;background:rgba(3,10,16,.7);backdrop-filter:blur(4px);pointer-events:auto}
+    .scope canvas{width:100%;height:100%}
+    .footer{display:flex;justify-content:space-between;align-items:center;gap:10px}
+    #record{width:64px;height:64px;border-radius:50%;border:4px solid #ffffffaa;background:#ff2d2d;cursor:pointer;transition:transform .15s}
+    #record.recording{background:#a30000;transform:scale(1.06);animation:pulse 1s infinite}
+    @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,0,0,.7)}70%{box-shadow:0 0 0 14px rgba(255,0,0,0)}100%{box-shadow:0 0 0 0 rgba(255,0,0,0)}}
+    .hint{opacity:.65;font-size:.9rem}
+    .btn{cursor:pointer}
+    .right{display:flex;gap:10px;align-items:center}
+    .kbd{padding:2px 6px;border:1px solid #2b4252;border-radius:6px;background:#0a1620;color:#bfeaff;font-size:.85rem}
+    .chk{accent-color:#00e5ff}
+    /* False-color legend panel */
+    #fcLegend{position:absolute;right:10px;top:10px;border:1px solid #1b3340;border-radius:8px;background:rgba(3,10,16,.8);backdrop-filter:blur(4px);padding:8px 10px;font-size:.85rem;display:none}
+    #fcLegend .row{justify-content:flex-start;gap:8px;margin:2px 0}
+    .sw{display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid #234}
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <!-- TOP BAR -->
+    <div class="row">
+      <div class="group">
+        <div class="chip">FPS: <strong id="fpsVal">24</strong></div>
+
+        <div class="chip">
+          <label><span>ISO</span>
+            <select id="isoSelect">
+              <option value="800">800 (Day)</option>
+              <option value="3200">3200 (Night)</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="chip">
+          <label><span>ND</span>
+            <input id="ndRange" type="range" min="0" max="8" step="1" value="0" />
+          </label>
+          <span id="ndLabel">0.0 (0 stops)</span>
+          <span id="ndSuggest" class="kbd">Suggest: —</span>
+          <button id="applyND" class="btn">Apply</button>
+        </div>
+
+        <div class="chip">
+          <label><span>Look</span>
+            <select id="lookSelect">
+              <option value="cube">3D LUT (.cube)</option>
+              <option value="slog3">S-Log3 (flat)</option>
+              <option value="rec709" selected>Rec.709</option>
+              <option value="dcip3">DCI-P3 vibe</option>
+            </select>
+          </label>
+          <input id="cubeFile" type="file" accept=".cube" />
+          <span id="lutName" class="kbd">No LUT</span>
+        </div>
+
+        <div class="chip">
+          <label><span>De-squeeze</span>
+            <select id="desq">
+              <option value="1">1.0×</option>
+              <option value="1.3">1.3×</option>
+              <option value="1.5">1.5×</option>
+              <option value="1.8">1.8×</option>
+              <option value="2">2.0×</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="chip">
+          <label><span>Gate</span>
+            <select id="gate">
+              <option value="2.39">2.39:1</option>
+              <option value="1.85">1.85:1</option>
+              <option value="1.78" selected>16:9</option>
+              <option value="1.33">4:3</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="group right">
+        <div class="chip">Battery: <span id="battery">—</span></div>
+        <div class="chip">
+          <label><span>Store</span>
+            <select id="storeMode">
+              <option value="Hot" selected>Hot (IndexedDB)</option>
+              <option value="Warm">Warm (Download)</option>
+              <option value="Cold">Cold (USB Save)</option>
+            </select>
+          </label>
+        </div>
+        <div class="chip">
+          <label style="display:flex;align-items:center;gap:8px">
+            <input id="recordOverlays" class="chk" type="checkbox" />
+            <span>Record overlays (zebra &amp; FC)</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- CENTER VIEW -->
+    <div id="view">
+      <!-- Preview canvas (with overlays) -->
+      <canvas id="glcanvas"></canvas>
+      <!-- Hidden recording canvas (overlays optionally disabled) -->
+      <canvas id="glcanvasRec" style="display:none"></canvas>
+
+      <div id="fcLegend">
+        <div class="row"><div class="sw" style="background:#590080"></div><div>< 10% (deep shadows)</div></div>
+        <div class="row"><div class="sw" style="background:#0050f2"></div><div>10–20% (shadows)</div></div>
+        <div class="row"><div class="sw" style="background:#00ccd8"></div><div>20–40% (low mid)</div></div>
+        <div class="row"><div class="sw" style="background:#1aca33"></div><div>40–55% (mid)</div></div>
+        <div class="row"><div class="sw" style="background:#e5e509"></div><div>55–70% (high mid)</div></div>
+        <div class="row"><div class="sw" style="background:#f67f19"></div><div>70–90% (near highlights)</div></div>
+        <div class="row"><div class="sw" style="background:#f31919"></div><div>> 90% (near clip)</div></div>
+      </div>
+
+      <div class="guides">
+        <div id="gateBox" class="gate"></div>
+
+        <!-- Scopes -->
+        <div class="overlays">
+          <div class="scope"><canvas id="waveCanvas"></canvas></div>
+          <div class="scope"><canvas id="paradeCanvas"></canvas></div>
+          <div class="scope"><canvas id="vectorCanvas"></canvas></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FOOTER / OVERLAY CONTROLS -->
+    <div class="footer">
+      <div class="group">
+        <div class="chip hint">Live-graded preview; recording matches preview only if “Record overlays” is ON.</div>
+
+        <div class="chip" style="flex-wrap:wrap">
+          <strong>Zebras</strong>
+          <label style="display:flex;align-items:center;gap:8px"><input id="zHiChk" class="chk" type="checkbox"/><span>Highlights</span></label>
+          <label><span>Hi Thr</span><input id="zHiThr" type="range" min="0.5" max="1.0" step="0.01" value="0.90"/></label>
+          <label style="display:flex;align-items:center;gap:8px"><input id="zLoChk" class="chk" type="checkbox"/><span>Shadows</span></label>
+          <label><span>Lo Thr</span><input id="zLoThr" type="range" min="0.0" max="0.5" step="0.01" value="0.10"/></label>
+          <label style="display:flex;align-items:center;gap:8px"><input id="zBandChk" class="chk" type="checkbox"/><span>Band</span></label>
+          <label><span>Band Lo</span><input id="zBandLo" type="range" min="0.0" max="1.0" step="0.01" value="0.40"/></label>
+          <label><span>Band Hi</span><input id="zBandHi" type="range" min="0.0" max="1.0" step="0.01" value="0.60"/></label>
+          <label><span>Density</span><input id="zDen" type="range" min="4" max="20" step="1" value="10"/></label>
+        </div>
+
+        <div class="chip">
+          <label style="display:flex;align-items:center;gap:8px"><input id="fcChk" class="chk" type="checkbox"/><span>False-Color</span></label>
+          <label style="display:flex;align-items:center;gap:8px"><input id="fcLegendChk" class="chk" type="checkbox" checked/><span>Legend</span></label>
+        </div>
+
+        <div class="chip">
+          <label style="display:flex;align-items:center;gap:8px"><input id="peakChk" class="chk" type="checkbox"/><span>Focus Peaking</span></label>
+          <label><span>Sens</span><input id="peakSens" type="range" min="0.5" max="5" step="0.1" value="1.5"/></label>
+        </div>
+      </div>
+
+      <button id="record" class="btn" title="Record"></button>
+
+      <div class="group">
+        <div class="chip">
+          <label><span>Resolution</span>
+            <select id="resSelect">
+              <option value="1280x720">HD 1280×720</option>
+              <option value="1920x1080" selected>FHD 1920×1080</option>
+              <option value="2560x1440">QHD 2560×1440</option>
+              <option value="3840x2160">UHD 3840×2160</option>
+            </select>
+          </label>
+        </div>
+        <div class="chip">
+          <label><span>FPS</span>
+            <select id="fpsSelect">
+              <option>23.976</option><option selected>24</option><option>25</option><option>29.97</option>
+              <option>30</option><option>50</option><option>59.94</option><option>60</option>
+            </select>
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Video feeder -->
+  <video id="src" playsinline muted style="display:none"></video>
+
+  <script>
+  // ---------- Shortcuts ----------
+  const $ = s => document.querySelector(s);
+  const clamp01 = x => Math.min(1, Math.max(0, x));
+
+  // ---------- UI refs ----------
+  const videoEl = $('#src');
+  const cPrev = $('#glcanvas');
+  const cRec  = $('#glcanvasRec'); // hidden canvas used for recording pass
+  const waveCanvas = $('#waveCanvas'), paradeCanvas = $('#paradeCanvas'), vectorCanvas = $('#vectorCanvas');
+  const fcLegend = $('#fcLegend');
+
+  const ndRange=$('#ndRange'), ndLabel=$('#ndLabel'), ndSuggest=$('#ndSuggest'), applyND=$('#applyND');
+  const lookSelect=$('#lookSelect'), cubeFile=$('#cubeFile'), lutName=$('#lutName');
+  const isoSelect=$('#isoSelect'), fpsSel=$('#fpsSelect'), resSel=$('#resSelect'), fpsVal=$('#fpsVal');
+  const recordBtn=$('#record'), batteryEl=$('#battery');
+  const desqSel=$('#desq'), gateSel=$('#gate'), gateBox=$('#gateBox');
+  const storeModeSel=$('#storeMode'), recordOverlays=$('#recordOverlays');
+
+  // Zebras / FC / Peaking
+  const zHiChk=$('#zHiChk'), zHiThr=$('#zHiThr');
+  const zLoChk=$('#zLoChk'), zLoThr=$('#zLoThr');
+  const zBandChk=$('#zBandChk'), zBandLo=$('#zBandLo'), zBandHi=$('#zBandHi');
+  const zDen=$('#zDen');
+  const fcChk=$('#fcChk'), fcLegendChk=$('#fcLegendChk');
+  const peakChk=$('#peakChk'), peakSens=$('#peakSens');
+
+  // ---------- GL pass builder ----------
+  function buildGL(canvas){
+    const gl = canvas.getContext('webgl', {preserveDrawingBuffer:false});
+    if(!gl){ alert('WebGL not available'); throw new Error('No WebGL'); }
+
+    const vert=`
+      attribute vec2 a_pos; attribute vec2 a_uv;
+      varying vec2 v_uv; void main(){ v_uv=a_uv; gl_Position=vec4(a_pos,0.0,1.0); }
+    `;
+    const frag=`
+      precision mediump float;
+      uniform sampler2D u_tex, u_lutTex;
+      uniform float u_exposure, u_lutSize, u_desqueeze;
+      uniform int   u_lutMode;   // 0=cube,1=slog3,2=rec709,3=dcip3
+      uniform vec2  u_texel;
+      // Overlays:
+      uniform int u_zHi, u_zLo, u_zBand, u_falseColor, u_peaking;
+      uniform float u_zHiThr, u_zLoThr, u_zBandLo, u_zBandHi, u_zDen;
+      uniform float u_peakSens;
+
+      varying vec2 v_uv;
+
+      vec3 toLinear(vec3 c){ return pow(c, vec3(2.2)); }
+      vec3 toDisplay(vec3 c){ return pow(c, vec3(1.0/2.2)); }
+      float luma(vec3 c){ return dot(c, vec3(0.2126,0.7152,0.0722)); }
+
+      vec3 slog3_encode(vec3 x){ x=clamp(x,0.0,1.0); return log(1.0+10.0*x)/log(11.0); }
+      vec3 rec709(vec3 x){ x=clamp(x,0.0,1.0); return smoothstep(0.02,0.98,x); }
+      vec3 dcip3(vec3 x){ x=clamp(x,0.0,1.0); vec3 y=mix(x,smoothstep(0.03,0.97,x),0.35); float l=luma(y); y=mix(vec3(l),y,1.15); return clamp(y,0.0,1.0); }
+
+      vec3 sampleLUTCube(vec3 col){
+        float N=u_lutSize, NM1=N-1.0; vec3 c=clamp(col,0.0,1.0)*NM1;
+        float r=c.r,g=c.g,b=c.b; float b0=floor(b), b1=min(b0+1.0,NM1), f=b-b0;
+        float width=N*N;
+        vec2 uv0=vec2((r + b0*N + 0.5)/width, (g + 0.5)/N);
+        vec2 uv1=vec2((r + b1*N + 0.5)/width, (g + 0.5)/N);
+        vec3 lo=texture2D(u_lutTex,uv0).rgb, hi=texture2D(u_lutTex,uv1).rgb;
+        return mix(lo,hi,f);
+      }
+
+      vec3 falseColor(float l){
+        if(l<0.10) return vec3(0.35,0.00,0.50);
+        if(l<0.20) return vec3(0.00,0.30,0.95);
+        if(l<0.40) return vec3(0.00,0.80,0.90);
+        if(l<0.55) return vec3(0.10,0.80,0.20);
+        if(l<0.70) return vec3(0.90,0.90,0.10);
+        if(l<0.90) return vec3(0.95,0.50,0.10);
+        return vec3(0.95,0.10,0.10);
+      }
+
+      void main(){
+        // anamorphic de-squeeze
+        vec2 uv=v_uv; uv.x=0.5+(uv.x-0.5)/max(u_desqueeze,1.0);
+
+        vec4 s=texture2D(u_tex,uv);
+        vec3 lin=toLinear(s.rgb)*u_exposure;
+
+        vec3 graded;
+        if(u_lutMode==0) graded=sampleLUTCube(lin);
+        else if(u_lutMode==1) graded=slog3_encode(lin);
+        else if(u_lutMode==2) graded=rec709(lin);
+        else graded=dcip3(lin);
+
+        vec3 outCol=toDisplay(graded);
+        float Y=luma(outCol);
+
+        // False-color
+        if(u_falseColor==1){
+          outCol = mix(outCol, falseColor(Y), 0.85);
+        }
+
+        // Zebra logic: combine three masks
+        float stripe=0.0;
+        // simple diagonal pattern from fragcoord
+        float pat = fract((gl_FragCoord.x + gl_FragCoord.y) * (u_zDen/100.0));
+        float band = step(0.5, pat); // 0/1 stripes
+
+        if(u_zHi==1 && Y>=u_zHiThr) stripe=1.0;
+        if(u_zLo==1 && Y<=u_zLoThr) stripe=1.0;
+        if(u_zBand==1 && Y>=min(u_zBandLo,u_zBandHi) && Y<=max(u_zBandLo,u_zBandHi)) stripe=1.0;
+
+        if(stripe>0.5){
+          outCol = mix(outCol, vec3(0.0), band*0.6);
+        }
+
+        // Peaking (always preview pass flag-controlled by caller)
+        if(u_peaking==1){
+          vec2 t=u_texel;
+          float tl=luma(texture2D(u_tex,uv+vec2(-t.x,-t.y)).rgb);
+          float tc=luma(texture2D(u_tex,uv+vec2( 0.0,-t.y)).rgb);
+          float tr=luma(texture2D(u_tex,uv+vec2( t.x,-t.y)).rgb);
+          float ml=luma(texture2D(u_tex,uv+vec2(-t.x, 0.0)).rgb);
+          float mr=luma(texture2D(u_tex,uv+vec2( t.x, 0.0)).rgb);
+          float bl=luma(texture2D(u_tex,uv+vec2(-t.x, t.y)).rgb);
+          float bc=luma(texture2D(u_tex,uv+vec2( 0.0, t.y)).rgb);
+          float br=luma(texture2D(u_tex,uv+vec2( t.x, t.y)).rgb);
+          float gx=(tr+2.0*mr+br)-(tl+2.0*ml+bl);
+          float gy=(bl+2.0*bc+br)-(tl+2.0*tc+tr);
+          float g=sqrt(gx*gx+gy*gy);
+          float e=smoothstep(0.15*u_peakSens, 0.35*u_peakSens, g);
+          vec3 pk=vec3(0.1,1.0,0.3);
+          outCol = mix(outCol, pk, e*0.75);
+        }
+
+        gl_FragColor=vec4(outCol,1.0);
+      }
+    `;
+
+    function comp(type,src){ const sh=gl.createShader(type); gl.shaderSource(sh,src); gl.compileShader(sh);
+      if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); return sh; }
+    const vs=comp(gl.VERTEX_SHADER,vert), fs=comp(gl.FRAGMENT_SHADER,frag);
+    const prog=gl.createProgram(); gl.attachShader(prog,vs); gl.attachShader(prog,fs); gl.linkProgram(prog);
+    if(!gl.getProgramParameter(prog,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+    gl.useProgram(prog);
+
+    // Quad
+    const quad=new Float32Array([-1,-1,0,0, 1,-1,1,0, -1,1,0,1, 1,1,1,1]);
+    const buf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,buf); gl.bufferData(gl.ARRAY_BUFFER,quad,gl.STATIC_DRAW);
+    const a_pos=gl.getAttribLocation(prog,'a_pos'), a_uv=gl.getAttribLocation(prog,'a_uv');
+    gl.enableVertexAttribArray(a_pos); gl.enableVertexAttribArray(a_uv);
+    gl.vertexAttribPointer(a_pos,2,gl.FLOAT,false,16,0); gl.vertexAttribPointer(a_uv,2,gl.FLOAT,false,16,8);
+
+    // Textures
+    const texVideo=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,texVideo);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+
+    const texLUT=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,texLUT);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+
+    // Uniforms
+    const U = name => gl.getUniformLocation(prog,name);
+    const uni = {
+      u_tex:U('u_tex'), u_lutTex:U('u_lutTex'), u_exposure:U('u_exposure'), u_lutSize:U('u_lutSize'),
+      u_lutMode:U('u_lutMode'), u_desqueeze:U('u_desqueeze'), u_texel:U('u_texel'),
+      u_zHi:U('u_zHi'), u_zLo:U('u_zLo'), u_zBand:U('u_zBand'),
+      u_zHiThr:U('u_zHiThr'), u_zLoThr:U('u_zLoThr'), u_zBandLo:U('u_zBandLo'), u_zBandHi:U('u_zBandHi'), u_zDen:U('u_zDen'),
+      u_falseColor:U('u_falseColor'), u_peaking:U('u_peaking'), u_peakSens:U('u_peakSens')
+    };
+    gl.uniform1i(uni.u_tex,0); gl.uniform1i(uni.u_lutTex,1);
+
+    return {gl, prog, texVideo, texLUT, uni};
+  }
+
+  // Build both passes
+  const Pprev = buildGL(cPrev);
+  const Prec  = buildGL(cRec);
+
+  // Resize handling
+  let targetW=1920, targetH=1080, targetFPS=24;
+  function resizeCanvases(){
+    const [w,h]=resSel.value.split('x').map(n=>parseInt(n,10));
+    targetW=w; targetH=h;
+    const rect=$('#view').getBoundingClientRect();
+    [cPrev,cRec].forEach(c=>{ c.width=targetW; c.height=targetH; c.style.width=rect.width+'px'; c.style.height=rect.height+'px'; });
+    [Pprev.gl,Prec.gl].forEach(gl=>gl.viewport(0,0,targetW,targetH));
+    updateGateBox();
+  }
+
+  function updateGateBox(){
+    const aspect=parseFloat(gateSel.value);
+    const rect=$('#view').getBoundingClientRect();
+    const box=gateBox.style; const vw=rect.width, vh=rect.height, va=vw/vh;
+    let bw,bh; if(va>aspect){ bh=vh; bw=bh*aspect; } else { bw=vw; bh=bw/aspect; }
+    box.width=bw+'px'; box.height=bh+'px'; box.top=(vh-bh)/2+'px';
+  }
+
+  // Battery + Camera
+  async function initBattery(){
+    try{ if(navigator.getBattery){ const b=await navigator.getBattery(); const setB=()=>batteryEl.textContent=Math.round(b.level*100)+'%'; setB(); b.addEventListener('levelchange',setB);} else batteryEl.textContent='—'; }catch{batteryEl.textContent='—'}
+  }
+  async function initCamera(){
+    targetFPS=parseFloat(fpsSel.value); fpsVal.textContent=fpsSel.value;
+    const cons={audio:true, video:{width:{ideal:targetW},height:{ideal:targetH}, frameRate:{ideal:targetFPS,max:targetFPS}}};
+    const stream=await navigator.mediaDevices.getUserMedia(cons);
+    videoEl.srcObject=stream; await videoEl.play();
+    [Pprev,Prec].forEach(P=>{ P.gl.useProgram(P.prog); P.gl.uniform2f(P.uni.u_texel, 1.0/videoEl.videoWidth, 1.0/videoEl.videoHeight); });
+  }
+
+  // ND + labels
+  function ndStopsFromSlider(v){ return parseInt(v,10); }
+  function exposureFromStops(stops){ return Math.pow(0.5,stops); }
+  function updateNDLabel(){ const s=ndStopsFromSlider(ndRange.value); ndLabel.textContent=(s*0.3).toFixed(1)+' ('+s+' stops)'; }
+
+  // LUT persistence in IndexedDB
+  let idb; const DB='pops_', STORE_CLIPS='clips', STORE_LUTS='luts', STORE_PREFS='prefs';
+  function idbOpen(){ return new Promise((res,rej)=>{ const req=indexedDB.open(DB,2); req.onupgradeneeded=e=>{ const db=req.result;
+    if(!db.objectStoreNames.contains(STORE_CLIPS)) db.createObjectStore(STORE_CLIPS,{keyPath:'id'});
+    if(!db.objectStoreNames.contains(STORE_LUTS))  db.createObjectStore(STORE_LUTS, {keyPath:'id'});
+    if(!db.objectStoreNames.contains(STORE_PREFS)) db.createObjectStore(STORE_PREFS,{keyPath:'key'}); };
+    req.onsuccess=()=>{idb=req.result; res();}; req.onerror=()=>rej(req.error); });}
+  function idbPut(store,obj){ return new Promise((res,rej)=>{ const tx=idb.transaction(store,'readwrite'); tx.objectStore(store).put(obj); tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); });}
+  function idbGet(store,key){ return new Promise((res,rej)=>{ const tx=idb.transaction(store,'readonly'); const req=tx.objectStore(store).get(key); req.onsuccess=()=>res(req.result||null); req.onerror=()=>rej(req.error); });}
+  async function setPref(key,value){ await idbPut(STORE_PREFS,{key,value}); }
+  async function getPref(key){ const r=await idbGet(STORE_PREFS,key); return r?r.value:null; }
+  async function saveLUT(id,size,packed,name){ await idbPut(STORE_LUTS,{id,size,packed,name,saved:new Date().toISOString()}); await setPref('lastLUT',id); }
+  async function loadLastLUT(){ const last=await getPref('lastLUT'); if(!last) return null; return await idbGet(STORE_LUTS,last); }
+
+  // .cube parsing & packing
+  function parseCube(txt){ const lines=txt.split(/\r?\n/); let size=0; const table=[];
+    for(const raw of lines){ const line=raw.trim(); if(!line||line.startsWith('#')) continue;
+      const up=line.toUpperCase(); if(up.startsWith('LUT_3D_SIZE')) size=parseInt(line.split(/\s+/)[1],10);
+      else if(!up.startsWith('DOMAIN_')){ const v=line.split(/\s+/).map(Number); if(v.length===3) table.push(v); } }
+    if(!size||table.length!==size*size*size) throw new Error('Invalid .cube');
+    const out=new Float32Array(size*size*size*3); for(let i=0;i<table.length;i++){ const [r,g,b]=table[i]; out[i*3]=r; out[i*3+1]=g; out[i*3+2]=b; } return {size,data:out}; }
+  function packLUTStrip(size,floatRGB){ const width=size*size, height=size, buf=new Uint8Array(width*height*4); let p=0;
+    for(let b=0;b<size;b++)for(let g=0;g<size;g++)for(let r=0;r<size;r++){ const idx=((b*size+g)*size+r)*3;
+      const R=Math.round(clamp01(floatRGB[idx])*255), G=Math.round(clamp01(floatRGB[idx+1])*255), B=Math.round(clamp01(floatRGB[idx+2])*255);
+      buf[p++]=R; buf[p++]=G; buf[p++]=B; buf[p++]=255; } return buf; }
+  function uploadPackedLUT(P, size, packed){ P.gl.activeTexture(P.gl.TEXTURE1); P.gl.bindTexture(P.gl.TEXTURE_2D,P.texLUT);
+    P.gl.texImage2D(P.gl.TEXTURE_2D,0,P.gl.RGBA,size*size,size,0,P.gl.RGBA,P.gl.UNSIGNED_BYTE,packed); }
+
+  // File → LUT
+  let hasCube=false, lutSize=33;
+  cubeFile.addEventListener('change', async ()=>{
+    const f=cubeFile.files[0]; if(!f) return;
+    const txt=await f.text();
+    try{
+      const {size,data}=parseCube(txt); const packed=packLUTStrip(size,data);
+      [Pprev,Prec].forEach(P=>uploadPackedLUT(P,size,packed)); hasCube=true; lutSize=size;
+      lutName.textContent=`${f.name} (${size}³)`; lookSelect.value='cube';
+      await idbOpen(); await saveLUT(f.name,size,packed,f.name);
+    }catch(e){ alert('LUT load error: '+e.message); hasCube=false; lutName.textContent='No LUT'; }
+  });
+
+  // Scopes / ND suggest
+  const scopeW=200, scopeH=120;
+  [waveCanvas,paradeCanvas,vectorCanvas].forEach(c=>{c.width=scopeW; c.height=scopeH;});
+  const sampleCanvas=document.createElement('canvas'); sampleCanvas.width=256; sampleCanvas.height=144;
+  const sctx=sampleCanvas.getContext('2d');
+  function drawScopes(){
+    sctx.drawImage(cPrev,0,0,sampleCanvas.width,sampleCanvas.height);
+    const img=sctx.getImageData(0,0,sampleCanvas.width,sampleCanvas.height).data;
+
+    // Waveform
+    const wctx=waveCanvas.getContext('2d'); wctx.fillStyle='rgba(5,15,20,0.85)'; wctx.fillRect(0,0,scopeW,scopeH);
+    wctx.strokeStyle='#69d8ff'; wctx.beginPath(); const cols=scopeW;
+    for(let x=0;x<cols;x++){ const sx=Math.floor(x/cols*sampleCanvas.width); let acc=0,n=0;
+      for(let y=0;y<sampleCanvas.height;y++){ const i=(y*sampleCanvas.width+sx)*4; const l=0.2126*img[i]+0.7152*img[i+1]+0.0722*img[i+2]; acc+=l; n++; }
+      const v=(acc/n)/255, yy=scopeH - Math.floor(v*scopeH); if(x===0) wctx.moveTo(x,yy); else wctx.lineTo(x,yy); }
+    wctx.stroke();
+
+    // Parade
+    const pctx=paradeCanvas.getContext('2d'); pctx.fillStyle='rgba(5,15,20,0.85)'; pctx.fillRect(0,0,scopeW,scopeH);
+    const bandW=Math.floor(scopeW/3); const chans=[{off:0,color:'#ff5c7a',idx:0},{off:bandW,color:'#7af0ff',idx:1},{off:bandW*2,color:'#ffd05c',idx:2}];
+    chans.forEach(ch=>{ pctx.strokeStyle=ch.color; pctx.beginPath();
+      for(let x=0;x<bandW;x++){ const sx=Math.floor(x/bandW*sampleCanvas.width); let acc=0,n=0;
+        for(let y=0;y<sampleCanvas.height;y++){ const i=(y*sampleCanvas.width+sx)*4; acc+=img[i+ch.idx]; n++; }
+        const v=(acc/n)/255, yy=scopeH - Math.floor(v*scopeH); if(x===0) pctx.moveTo(ch.off+x,yy); else pctx.lineTo(ch.off+x,yy); }
+      pctx.stroke(); });
+
+    // Vectorscope
+    const vctx=vectorCanvas.getContext('2d'); vctx.fillStyle='rgba(5,15,20,0.85)'; vctx.fillRect(0,0,scopeW,scopeH);
+    const cx=scopeW/2, cy=scopeH/2, rad=Math.min(cx,cy)-2; vctx.strokeStyle='#174055'; vctx.beginPath(); vctx.arc(cx,cy,rad,0,Math.PI*2); vctx.stroke();
+    vctx.fillStyle='rgba(122,240,255,0.7)'; const step=4;
+    for(let y=0;y<sampleCanvas.height;y+=step){ for(let x=0;x<sampleCanvas.width;x+=step){
+      const i=(y*sampleCanvas.width+x)*4; const r=img[i]/255,g=img[i+1]/255,b=img[i+2]/255; const mx=Math.max(r,g,b), mn=Math.min(r,g,b), d=mx-mn;
+      let h=0; if(d!==0){ if(mx===r) h=((g-b)/d)%6; else if(mx===g) h=(b-r)/d+2; else h=(r-g)/d+4; h*=60; if(h<0)h+=360; }
+      const s=mx===0?0:d/mx; const ang=h*Math.PI/180, rr=s*rad; const px=cx+Math.cos(ang)*rr, py=cy-Math.sin(ang)*rr; vctx.fillRect(px,py,1,1);
+    }}
+    // ND suggest (median)
+    const hist=new Uint32Array(256); for(let i=0;i<img.length;i+=4){ const l=Math.round(0.2126*img[i]+0.7152*img[i+1]+0.0722*img[i+2]); hist[l]++; }
+    let tot=0; for(let i=0;i<256;i++) tot+=hist[i]; let cum=0, med=0; for(let i=0;i<256;i++){ cum+=hist[i]; if(cum>=tot/2){ med=i; break; } }
+    const median=med/255, target=0.45; let stops=0; if(median>target) stops=Math.log(median/target)/Math.log(2); const sug=Math.min(8,Math.max(0,Math.round(stops)));
+    ndSuggest.textContent = sug>0?`Suggest: ND ${(sug*0.3).toFixed(1)} (${sug} st)`:'Suggest: ND 0.0';
+  }
+
+  // Per-frame render for a pass
+  function renderPass(P, opts){
+    const {gl, texVideo, uni} = P;
+    // update video texture
+    if(videoEl.readyState>=2){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,texVideo);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true); gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,videoEl); }
+    gl.useProgram(P.prog);
+    gl.uniform1f(uni.u_exposure, opts.exposure);
+    gl.uniform1f(uni.u_lutSize, opts.lutSize);
+    gl.uniform1i(uni.u_lutMode, opts.lutMode);
+    gl.uniform1f(uni.u_desqueeze, opts.desqueeze);
+    gl.uniform2f(uni.u_texel, 1.0/videoEl.videoWidth, 1.0/videoEl.videoHeight);
+
+    // Overlays
+    gl.uniform1i(uni.u_falseColor, opts.falseColor?1:0);
+    gl.uniform1i(uni.u_zHi,  opts.zHi?1:0);
+    gl.uniform1i(uni.u_zLo,  opts.zLo?1:0);
+    gl.uniform1i(uni.u_zBand,opts.zBand?1:0);
+    gl.uniform1f(uni.u_zHiThr, opts.zHiThr);
+    gl.uniform1f(uni.u_zLoThr, opts.zLoThr);
+    gl.uniform1f(uni.u_zBandLo, Math.min(opts.zBandLo, opts.zBandHi));
+    gl.uniform1f(uni.u_zBandHi, Math.max(opts.zBandLo, opts.zBandHi));
+    gl.uniform1f(uni.u_zDen, opts.zDen);
+    gl.uniform1i(uni.u_peaking, opts.peaking?1:0);
+    gl.uniform1f(uni.u_peakSens, opts.peakSens);
+
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,P.texLUT);
+    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  }
+
+  // Animate both passes
+  function lutModeIndex(){ const v=lookSelect.value; if(v==='cube'&&hasCube) return 0; if(v==='slog3') return 1; if(v==='rec709') return 2; return 3; }
+  function animate(){
+    requestAnimationFrame(animate);
+    const s=ndStopsFromSlider(ndRange.value), exposure=exposureFromStops(s);
+    const optsPreview = {
+      exposure, lutSize, lutMode:lutModeIndex(), desqueeze:parseFloat(desqSel.value),
+      falseColor: fcChk.checked, zHi: zHiChk.checked, zLo: zLoChk.checked, zBand: zBandChk.checked,
+      zHiThr: parseFloat(zHiThr.value), zLoThr: parseFloat(zLoThr.value), zBandLo: parseFloat(zBandLo.value), zBandHi: parseFloat(zBandHi.value),
+      zDen: parseFloat(zDen.value), peaking: peakChk.checked, peakSens: parseFloat(peakSens.value)
+    };
+    const includeOverlaysInRecord = recordOverlays.checked;
+    const optsRecord = {
+      ...optsPreview,
+      // Only bake zebras & false-color if switch is ON; peaking left OFF in record
+      falseColor: includeOverlaysInRecord ? optsPreview.falseColor : false,
+      zHi: includeOverlaysInRecord ? optsPreview.zHi : false,
+      zLo: includeOverlaysInRecord ? optsPreview.zLo : false,
+      zBand: includeOverlaysInRecord ? optsPreview.zBand : false,
+      peaking: false
+    };
+
+    ndLabel.textContent=(s*0.3).toFixed(1)+' ('+s+' stops)';
+
+    renderPass(Pprev, optsPreview);
+    renderPass(Prec,  optsRecord);
+
+    if(!animate._last || performance.now()-animate._last>150){ drawScopes(); animate._last=performance.now(); }
+
+    // Legend visibility
+    fcLegend.style.display = (fcChk.checked && fcLegendChk.checked) ? 'block' : 'none';
+  }
+
+  // Recording
+  let mediaRecorder, chunks=[];
+  function pickMime(){ const prefs=['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm']; for(const m of prefs){ if(MediaRecorder.isTypeSupported(m)) return m; } return ''; }
+  function downloadBlob(blob, name){ const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000); }
+  function buildSidecar(base, blob){
+    const [w,h]=resSel.value.split('x').map(Number);
+    return { id:base, created:new Date().toISOString(), iso:parseInt(isoSelect.value,10),
+      nd_stops:ndStopsFromSlider(ndRange.value), nd_density:ndStopsFromSlider(ndRange.value)*0.3,
+      look:lookSelect.value, cube_loaded:hasCube?lutName.textContent:null, fps:parseFloat(fpsSel.value),
+      resolution:{width:w,height:h}, desqueeze:parseFloat(desqSel.value), gate:parseFloat(gateSel.value),
+      overlays:{ record_overlays:recordOverlays.checked, fc:fcChk.checked, zebra:{hi:zHiChk.checked,lo:zLoChk.checked,band:zBandChk.checked} },
+      storage_mode:storeModeSel.value, file:{mime:blob.type,bytes:blob.size} };
+  }
+  async function idbPutClip(id, blob, json){
+    if(!idb) await idbOpen(); return new Promise((res,rej)=>{ const tx=idb.transaction('clips','readwrite'); tx.objectStore('clips').put({id,video:blob,meta:json}); tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); });
+  }
+  async function startRecording(){
+    const srcCanvas = recordOverlays.checked ? cPrev : cRec;
+    const stream = srcCanvas.captureStream(targetFPS||24);
+    const mime = pickMime();
+    mediaRecorder = new MediaRecorder(stream, mime?{mimeType:mime}:{});
+    chunks=[]; mediaRecorder.ondataavailable = e=>{ if(e.data.size>0) chunks.push(e.data); };
+    mediaRecorder.onstop = async ()=>{
+      const blob = new Blob(chunks,{type:'video/webm'}); const ts=new Date().toISOString().replace(/[:.]/g,'-'); const base=`POPS__${ts}`;
+      const json = buildSidecar(base, blob);
+      if(storeModeSel.value==='Hot'){ await idbOpen(); await idbPutClip(base,blob,json); }
+      downloadBlob(blob, `${base}.webm`);
+      downloadBlob(new Blob([JSON.stringify(json,null,2)],{type:'application/json'}), `${base}.json`);
+    };
+    mediaRecorder.start(); recordBtn.classList.add('recording');
+  }
+  function stopRecording(){ if(mediaRecorder && mediaRecorder.state!=='inactive') mediaRecorder.stop(); recordBtn.classList.remove('recording'); }
+
+  // Events
+  fpsSel.addEventListener('change', async ()=>{ try{ const old=videoEl.srcObject; if(old) old.getTracks().forEach(t=>t.stop()); }catch{} await initCamera(); });
+  resSel.addEventListener('change', resizeCanvases);
+  gateSel.addEventListener('change', updateGateBox);
+  ndRange.addEventListener('input', updateNDLabel);
+  applyND.addEventListener('click', ()=>{ const m=ndSuggest.textContent.match(/ND\s([\d.]+)/); if(m){ const stops=Math.round(parseFloat(m[1])/0.3); ndRange.value=String(Math.min(8,Math.max(0,stops))); updateNDLabel(); }});
+  recordBtn.addEventListener('click', ()=>{ if(!mediaRecorder || mediaRecorder.state==='inactive') startRecording(); else stopRecording(); });
+
+  // Boot
+  (async function boot(){
+    await idbOpen(); await initBattery();
+    resizeCanvases(); await initCamera();
+
+    // Preload last LUT from Hot storage
+    try{
+      const rec=await loadLastLUT();
+      if(rec && rec.packed && rec.size){
+        const packed = rec.packed instanceof Uint8Array ? rec.packed : new Uint8Array(rec.packed);
+        [Pprev,Prec].forEach(P=>uploadPackedLUT(P,rec.size,packed));
+        hasCube=true; lutSize=rec.size; lookSelect.value='cube'; lutName.textContent=`${rec.name||rec.id} (${rec.size}³)`;
+      }
+    }catch(e){ console.warn('No LUT preload:', e); }
+
+    // Start render loop
+    animate();
+  })();
+  </script>
+</body>
+</html>
