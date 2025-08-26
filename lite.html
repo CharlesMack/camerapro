@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>P.O.P.S. Camera HUD — Live Grading</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #000; color: #cfefff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      height: 100vh; display: grid; place-items: center;
+    }
+    #hud {
+      width: min(96vw, 1200px);
+      height: min(92vh, 700px);
+      border: 2px solid #00e5ff55;
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(0,0,0,.7), rgba(0,0,0,.45));
+      backdrop-filter: blur(6px);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 10px; padding: 12px;
+    }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .chip {
+      border: 1px solid #1d3a44;
+      background: linear-gradient(180deg, #0a151d, #071018);
+      color: #aee7ff; padding: 8px 12px; border-radius: 10px;
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 0.95rem;
+    }
+    .group { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    label span { opacity: .8; margin-right: 6px; }
+    select, input[type="range"] {
+      background: #061019; color: #dff8ff;
+      border: 1px solid #163242; border-radius: 8px;
+      padding: 6px 10px; font-size: 0.95rem;
+      -webkit-appearance: none; appearance: none;
+    }
+    input[type="range"] { width: 160px; }
+    #view {
+      position: relative; border: 1px solid #0c2633; border-radius: 8px; overflow: hidden;
+      background: #000;
+    }
+    canvas { width: 100%; height: 100%; display: block; }
+    /* Safe frame overlay */
+    .frame-guides {
+      position: absolute; inset: 0; pointer-events: none;
+      border: 2px dashed rgba(0, 229, 255, 0.4);
+      margin: calc(50% - (100% / 2.39)) 0;  /* 2.39:1 letterbox look */
+    }
+    .footer {
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    }
+    #record {
+      width: 64px; height: 64px; border-radius: 50%;
+      border: 4px solid #ffffffaa; background: #ff2d2d; cursor: pointer;
+      transition: transform .15s ease;
+    }
+    #record.recording { background: #a30000; transform: scale(1.06); animation: pulse 1s infinite; }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(255, 0, 0, .7); }
+      70% { box-shadow: 0 0 0 14px rgba(255, 0, 0, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(255, 0, 0, 0); }
+    }
+    .meter { min-width: 180px; text-align: right; }
+    .hint { opacity: .65; font-size: .9rem; }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <!-- TOP BAR -->
+    <div class="row">
+      <div class="group">
+        <div class="chip">FPS: <strong id="fpsVal">24</strong></div>
+        <div class="chip">
+          <label>
+            <span>ISO</span>
+            <select id="isoSelect">
+              <option value="800">800 (Day)</option>
+              <option value="3200">3200 (Night)</option>
+            </select>
+          </label>
+        </div>
+        <div class="chip">
+          <label>
+            <span>ND</span>
+            <input id="ndRange" type="range" min="0" max="8" step="1" value="0" />
+          </label>
+          <span id="ndLabel">0.0 (0 stops)</span>
+        </div>
+        <div class="chip">
+          <label>
+            <span>LUT</span>
+            <select id="lutSelect">
+              <option value="slog3">S‑Log3 (flat)</option>
+              <option value="rec709" selected>Rec.709</option>
+              <option value="dcip3">DCI‑P3 vibe</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="group">
+        <div class="chip meter">Battery: <span id="battery">—</span></div>
+        <div class="chip meter">Storage: <span id="storage">Hot</span></div>
+      </div>
+    </div>
+
+    <!-- CENTER VIEW -->
+    <div id="view">
+      <canvas id="glcanvas"></canvas>
+      <div class="frame-guides"></div>
+    </div>
+
+    <!-- FOOTER -->
+    <div class="footer">
+      <div class="group hint">
+        <span>Preview is live‑graded. Recording captures this same graded feed.</span>
+      </div>
+      <button id="record" title="Record"></button>
+      <div class="group">
+        <div class="chip">
+          <label>
+            <span>Resolution</span>
+            <select id="resSelect">
+              <option value="1280x720">HD 1280×720</option>
+              <option value="1920x1080" selected>FHD 1920×1080</option>
+              <option value="2560x1440">QHD 2560×1440</option>
+              <option value="3840x2160">UHD 3840×2160</option>
+            </select>
+          </label>
+        </div>
+        <div class="chip">
+          <label>
+            <span>FPS</span>
+            <select id="fpsSelect">
+              <option>23.976</option>
+              <option selected>24</option>
+              <option>25</option>
+              <option>29.97</option>
+              <option>30</option>
+              <option>50</option>
+              <option>59.94</option>
+              <option>60</option>
+            </select>
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden video feeder -->
+  <video id="src" playsinline muted style="display:none"></video>
+
+  <script>
+  // --- GLSL shader with simple tone curves + ND exposure ---
+  const frag = `
+    precision mediump float;
+    uniform sampler2D u_tex;
+    uniform float u_exposure;   // linear scalar (0..1)
+    uniform int   u_lut;        // 0=slog3,1=rec709,2=dcip3
+    varying vec2 v_uv;
+
+    // Simple gamma helpers
+    vec3 toLinear(vec3 c){ return pow(c, vec3(2.2)); }
+    vec3 toDisplay(vec3 c){ return pow(c, vec3(1.0/2.2)); }
+
+    // Approx S-Log3 curve (very rough preview flattening)
+    vec3 slog3_encode(vec3 x){
+      // compress highlights, lift shadows slightly
+      x = clamp(x, 0.0, 1.0);
+      vec3 a = log(1.0 + 10.0 * x) / log(11.0); // log-like
+      return a;
+    }
+
+    // Rec709-ish contrast curve
+    vec3 rec709(vec3 x){
+      x = clamp(x, 0.0, 1.0);
+      // mild S-curve
+      vec3 y = smoothstep(0.02, 0.98, x);
+      return y;
+    }
+
+    // Very rough DCI-P3 "vibe": light saturation bump + gentle contrast
+    vec3 dcip3(vec3 x){
+      x = clamp(x, 0.0, 1.0);
+      // mild contrast
+      vec3 y = mix(x, smoothstep(0.03, 0.97, x), 0.35);
+      // saturation bump
+      float l = dot(y, vec3(0.2126, 0.7152, 0.0722));
+      y = mix(vec3(l), y, 1.15);
+      return clamp(y, 0.0, 1.0);
+    }
+
+    void main(){
+      vec4 t = texture2D(u_tex, v_uv);
+      vec3 lin = toLinear(t.rgb);
+
+      // Apply ND exposure cut (before curve)
+      lin *= u_exposure; // u_exposure in [~0.0039..1]
+
+      // LUT approximation
+      vec3 graded;
+      if(u_lut==0){
+        graded = slog3_encode(lin);
+      } else if (u_lut==1){
+        graded = rec709(lin);
+      } else {
+        graded = dcip3(lin);
+      }
+
+      gl_FragColor = vec4(toDisplay(graded), 1.0);
+    }
+  `;
+
+  const vert = `
+    attribute vec2 a_pos;
+    attribute vec2 a_uv;
+    varying vec2 v_uv;
+    void main(){
+      v_uv = a_uv;
+      gl_Position = vec4(a_pos, 0.0, 1.0);
+    }
+  `;
+
+  const $ = sel => document.querySelector(sel);
+
+  const videoEl = $('#src');
+  const canvas = $('#glcanvas');
+  const ndRange = $('#ndRange');
+  const ndLabel = $('#ndLabel');
+  const lutSelect = $('#lutSelect');
+  const isoSelect = $('#isoSelect');
+  const fpsSel = $('#fpsSelect');
+  const resSel = $('#resSelect');
+  const fpsVal = $('#fpsVal');
+  const recordBtn = $('#record');
+  const batteryEl = $('#battery');
+
+  let gl, prog, tex, u_tex, u_exposure, u_lut;
+  let mediaRecorder, chunks = [];
+  let running = true;
+  let targetW = 1920, targetH = 1080, targetFPS = 24;
+
+  function ndStopsFromSlider(v){
+    // Slider 0..8 -> 0..8 stops (0.3 density per stop typical)
+    const stops = parseInt(v,10);
+    return stops;
+  }
+  function exposureFromStops(stops){
+    // per-stop halves light
+    return Math.pow(0.5, stops);
+  }
+
+  function lutIndex(){
+    return { 'slog3':0, 'rec709':1, 'dcip3':2 }[lutSelect.value] ?? 1;
+  }
+
+  function makeGL(){
+    gl = canvas.getContext('webgl', { preserveDrawingBuffer: false });
+    if(!gl){ alert('WebGL not available'); return; }
+
+    function compile(type, src){
+      const sh = gl.createShader(type);
+      gl.shaderSource(sh, src);
+      gl.compileShader(sh);
+      if(!gl.getShaderParameter(sh, gl.COMPILE_STATUS)){
+        console.error(gl.getShaderInfoLog(sh));
+        throw new Error('Shader compile error');
+      }
+      return sh;
+    }
+    const vs = compile(gl.VERTEX_SHADER, vert);
+    const fs = compile(gl.FRAGMENT_SHADER, frag);
+    prog = gl.createProgram();
+    gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+    if(!gl.getProgramParameter(prog, gl.LINK_STATUS)){
+      console.error(gl.getProgramInfoLog(prog));
+      throw new Error('Program link error');
+    }
+    gl.useProgram(prog);
+
+    // Fullscreen quad
+    const quad = new Float32Array([
+      -1,-1,  0,0,
+       1,-1,  1,0,
+      -1, 1,  0,1,
+       1, 1,  1,1
+    ]);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+
+    const a_pos = gl.getAttribLocation(prog, 'a_pos');
+    const a_uv  = gl.getAttribLocation(prog, 'a_uv');
+    gl.enableVertexAttribArray(a_pos);
+    gl.enableVertexAttribArray(a_uv);
+    gl.vertexAttribPointer(a_pos, 2, gl.FLOAT, false, 16, 0);
+    gl.vertexAttribPointer(a_uv,  2, gl.FLOAT, false, 16, 8);
+
+    // Texture from video
+    tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    u_tex = gl.getUniformLocation(prog, 'u_tex');
+    u_exposure = gl.getUniformLocation(prog, 'u_exposure');
+    u_lut = gl.getUniformLocation(prog, 'u_lut');
+    gl.uniform1i(u_tex, 0);
+  }
+
+  function resizeCanvas(){
+    const [w,h] = resSel.value.split('x').map(n=>parseInt(n,10));
+    targetW = w; targetH = h;
+    const rect = $('#view').getBoundingClientRect();
+    // Fit canvas to container while honoring selected resolution in backing store
+    canvas.width = targetW;
+    canvas.height = targetH;
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    gl.viewport(0,0,canvas.width, canvas.height);
+  }
+
+  async function initBattery(){
+    try {
+      if(navigator.getBattery){
+        const b = await navigator.getBattery();
+        const setB = ()=> batteryEl.textContent = Math.round(b.level*100) + '%';
+        setB(); b.addEventListener('levelchange', setB);
+      } else {
+        batteryEl.textContent = '—';
+      }
+    } catch { batteryEl.textContent = '—'; }
+  }
+
+  async function initCamera(){
+    // Pick the closest camera constraints to our selected frame rate
+    targetFPS = parseFloat(fpsSel.value);
+    fpsVal.textContent = fpsSel.value;
+    const constraints = {
+      audio: true,
+      video: {
+        width: { ideal: targetW }, height:{ ideal: targetH },
+        frameRate: { ideal: targetFPS, max: targetFPS }
+      }
+    };
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    videoEl.srcObject = stream;
+    await videoEl.play();
+  }
+
+  function animate(){
+    if(!running) return;
+    requestAnimationFrame(animate);
+
+    // Update texture from video
+    if(videoEl.readyState >= 2){
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA,
+                    gl.UNSIGNED_BYTE, videoEl);
+    }
+
+    // Exposure from ND
+    const stops = ndStopsFromSlider(ndRange.value);
+    const exposure = exposureFromStops(stops);
+    ndLabel.textContent = (stops*0.3).toFixed(1) + ' ('
+                          + stops + ' stops)';
+
+    gl.useProgram(prog);
+    gl.uniform1f(u_exposure, exposure);
+
+    const lutIdx = lutIndex();
+    gl.uniform1i(u_lut, lutIdx);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  // Recording from the graded canvas
+  function startRecording(){
+    const stream = canvas.captureStream(targetFPS || 24);
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9' });
+    mediaRecorder.ondataavailable = e => { if(e.data.size>0) chunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      const blob = new Blob(chunks, { type: 'video/webm' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const ts = new Date().toISOString().replace(/[:.]/g,'-');
+      a.href = url; a.download = `POPS_VENICE_graded_${ts}.webm`; a.click();
+      chunks = [];
+    };
+    mediaRecorder.start();
+    recordBtn.classList.add('recording');
+  }
+
+  function stopRecording(){
+    if(mediaRecorder && mediaRecorder.state !== 'inactive'){
+      mediaRecorder.stop();
+    }
+    recordBtn.classList.remove('recording');
+  }
+
+  // Event wiring
+  fpsSel.addEventListener('change', async ()=>{
+    // Reinit camera for new FPS
+    try {
+      const old = videoEl.srcObject;
+      if(old) old.getTracks().forEach(t=>t.stop());
+    } catch {}
+    await initCamera();
+  });
+
+  resSel.addEventListener('change', ()=>{
+    resizeCanvas();
+  });
+
+  recordBtn.addEventListener('click', ()=>{
+    if(!mediaRecorder || mediaRecorder.state === 'inactive'){
+      startRecording();
+    } else {
+      stopRecording();
+    }
+  });
+
+  // Boot
+  (async function boot(){
+    await initBattery();
+    makeGL();
+    resizeCanvas();
+    await initCamera();
+    animate();
+  })();
+  </script>
+</body>
+</html>
